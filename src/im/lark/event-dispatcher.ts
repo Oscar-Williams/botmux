@@ -46,6 +46,7 @@ import {
 import { automateOpenPlatformSetup, MESSAGE_UPDATED_EVENT, MESSAGE_RECALLED_EVENT, ensureAppEventSubscriptions, probeVcMeetingEventSubscription, readDefaultScopeManifest, filterScopeManifest, inspectUnderReviewConfigHints } from '../../setup/open-platform-automation.js';
 import { type Brand, larkHosts, normalizeBrand } from './lark-hosts.js';
 import { isGrantTargetOnly, tryHandleGrantCommand } from './grant-command.js';
+import { applyDelegatedGrants } from './delegated-grant.js';
 import { tryHandleInviteCommand } from './invite-command.js';
 import { autoInviteOwnerOnGroupJoin } from '../../services/groups-store.js';
 import { tryHandleReplyModeCommand } from './reply-mode-command.js';
@@ -5044,6 +5045,12 @@ export function createLarkEventDispatcherRuntime(
           }
           return;
         }
+        // 委托授权：grantDelegateBots 里的 bot @ 本 bot 时，把它同时点名的人写进本群 chatGrants
+        // （talk-only）。放在路由前，被点名的人紧接着 @ 本 bot 就不会再撞授权闸。
+        await applyDelegatedGrants(larkAppId, message, {
+          chatType,
+          senderIds: [sender.sender_id?.open_id, sender.sender_id?.app_id],
+        }).catch(err => logger.warn(`[grant:${larkAppId}] delegated grant failed: ${err}`));
         const decision = await decideRoutingWithSource(larkAppId, message);
         const ctx = { scope: decision.scope, anchor: decision.anchor };
         // Legacy /t provenance backfill reads an immutable root message and may
