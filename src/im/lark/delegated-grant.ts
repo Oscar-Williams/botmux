@@ -55,8 +55,13 @@ function delegatedGrantTargets(
 }
 
 /**
- * 处理一条已确认 @ 了本 bot 的 bot 消息。发送方不是委托 bot / 非群聊 / 没有可授权的人时什么都不做。
+ * 处理一条已确认 @ 了本 bot 的 bot 消息。发送方不是委托 bot（或被拉黑）/ 非群聊 /
+ * 没有可授权的人时什么都不做。
  * 返回本次落库授权的 open_id 列表（首次授权 + 过期后的重新授权；有效期内的既有授权会被上游跳过）。
+ *
+ * ⚠️ 调用方必须**先**跑完 `bindDefaultOncallBeforeTalk` 再调本函数：defaultOncall 群的
+ * oncall 绑定是首条消息时懒写入的，先判 evaluateTalk 会看不到它，于是给本就能说话的人
+ * 白写一条 chatGrant、并回一张「你已获授权」卡（oncall 群里属于噪音）。
  */
 export async function applyDelegatedGrants(
   larkAppId: string,
@@ -68,6 +73,14 @@ export async function applyDelegatedGrants(
   if (!isGrantDelegateSender(larkAppId, opts.senderIds)) return [];
 
   const senders = new Set(opts.senderIds.filter((x): x is string => !!x));
+  // 黑名单是 sender 维度的全局否决，必须先于「它是不是委托 bot」生效：否则 owner 拉黑
+  // 某个 bot 之后，只要 bots.json 里还留着它的 grantDelegateBots 条目，它照样能给别人
+  // 发本群 talk 授权 —— 拉黑只拦它自己说话，拦不住它替别人开门（下游 bot 闸随后丢掉它
+  // 这条消息，于是「被黑的 bot 授权成功、自己的消息被吞」，更难排查）。
+  if ([...senders].some(id => getBot(larkAppId).resolvedBlockedUsers.includes(id))) {
+    logger.info(`[grant:${larkAppId}] delegated grant skipped: delegate sender is blocked in ${chatId}`);
+    return [];
+  }
   // evaluateTalk 而不是 canTalk：黑名单腿排在 chatGrant 之前，被黑用户 canTalk=false
   // 但绝不能给 ta 落授权、更不能回「已获授权」卡（与 maybeSendGrantRequestCard 的
   // blocked 短路一致）。其余「已能对话」（owner/oncall/peer/已有授权/开放模式）跳过。

@@ -5045,12 +5045,6 @@ export function createLarkEventDispatcherRuntime(
           }
           return;
         }
-        // 委托授权：grantDelegateBots 里的 bot @ 本 bot 时，把它同时点名的人写进本群 chatGrants
-        // （talk-only）。放在路由前，被点名的人紧接着 @ 本 bot 就不会再撞授权闸。
-        await applyDelegatedGrants(larkAppId, message, {
-          chatType,
-          senderIds: [sender.sender_id?.open_id, sender.sender_id?.app_id],
-        }).catch(err => logger.warn(`[grant:${larkAppId}] delegated grant failed: ${err}`));
         const decision = await decideRoutingWithSource(larkAppId, message);
         const ctx = { scope: decision.scope, anchor: decision.anchor };
         // Legacy /t provenance backfill reads an immutable root message and may
@@ -5061,6 +5055,16 @@ export function createLarkEventDispatcherRuntime(
         // mentionedThisBot 以及再往后的 talk gate 共用同一结论；之间只有路由计算，
         // 不改授权状态（曾是两条手抄 OR 链，漏一处即「能路由但不能 fold」类二次分裂）。
         await bindDefaultOncallBeforeTalk(larkAppId, chatId, chatType);
+        // 委托授权：grantDelegateBots 里的 bot @ 本 bot 时，把它同时点名的人写进本群 chatGrants
+        // （talk-only）。必须排在 bindDefaultOncallBeforeTalk **之后**：applyDelegatedGrants
+        // 用 evaluateTalk 判「已能说话就跳过」，而 defaultOncall 群的 oncall 绑定要到这行才
+        // 伏写入；顺序反了就会给本就能在 oncall 群里说话的人白落一条 chatGrant + 一张
+        // 「已获授权」卡。同样排在发送方自己的 talk 闸之前：授权对象是**被点名者**，与
+        // 委托 bot 自己能否发言无关（它自己被拦时下游照旧拦）。
+        await applyDelegatedGrants(larkAppId, message, {
+          chatType,
+          senderIds: [sender.sender_id?.open_id, sender.sender_id?.app_id],
+        }).catch(err => logger.warn(`[grant:${larkAppId}] delegated grant failed: ${err}`));
         const botTalk = evaluateBotTalk(larkAppId, chatId, senderOpenId, senderUnionId);
         if (botTalk.allowed) {
           await promoteExplicitP2pTopicIfNeeded({

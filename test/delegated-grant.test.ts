@@ -146,7 +146,18 @@ describe('applyDelegatedGrants', () => {
     expect(replyMock).toHaveBeenCalledTimes(1);
   });
 
-  it('never grants blocked users and stays silent', async () => {
+  it('ignores a delegate bot that is itself on the block list', async () => {
+    // 黑名单是 sender 维度的全局否决：拉黑委托 bot 之后，即使 bots.json 里还留着它的
+    // grantDelegateBots 条目，它也不能替别人开门（否则拉黑只拦它自己说话，拦不住
+    // 它给别人发本群 talk 授权）。
+    getBot('bd').resolvedBlockedUsers = [PLATFORM_BOT];
+    const granted = await applyDelegatedGrants('bd', kickoffCard(), { chatType: 'group', senderIds: [PLATFORM_BOT] });
+    expect(granted).toEqual([]);
+    expect(canTalk('bd', 'oc_room', 'ou_req')).toBe(false);
+    expect(replyMock).not.toHaveBeenCalled();
+  });
+
+  it('never grants blocked mention targets and stays silent', async () => {
     getBot('bd').resolvedBlockedUsers = ['ou_blocked'];
     const msg = kickoffCard([{ open_id: 'ou_blocked', name: '黑名单' }]);
     const granted = await applyDelegatedGrants('bd', msg, { chatType: 'group', senderIds: [PLATFORM_BOT] });

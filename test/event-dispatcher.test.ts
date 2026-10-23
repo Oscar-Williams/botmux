@@ -5522,6 +5522,44 @@ describe('im.message.receive_v1 — bot-to-bot @mention routing', () => {
     expect(handlers.handleNewTopic).not.toHaveBeenCalled();
   });
 
+  it('delegated grant: runs after the defaultOncall lazy bind, so oncall-blessed people are not re-granted', async () => {
+    // defaultOncall 群的 oncall 绑定是首条消息时才懒写入的。applyDelegatedGrants 用
+    // evaluateTalk 判「已能说话就跳过」：若它跑在 ensureDefaultOncallBound 之前，就看不到
+    // 那一刻刚建立的 oncall 绑定 → 给本来就能说话的人白写一条 chatGrant、并回一张
+    // 「你已获授权」卡（oncall 群里纯噪音，也把 chatGrants 弄脏）。
+    setupBotState({ allowedUsers: ['ou_owner'], grantDelegateBots: ['ou_platform_bot'] });
+    mockGetChatMode.mockResolvedValueOnce('group');
+    mockReadFileSync.mockReturnValue('{}');
+    mockEnsureDefaultOncallBound.mockImplementationOnce(async () => {
+      // 对齐真实实现：锁内 RMW + 磁盘写之后才把绑定发布进内存态（findOncallChat 读的那份）。
+      await Promise.resolve();
+      await Promise.resolve();
+      const entry = { chatId: 'chat-001', workingDir: '/repo' };
+      mockFindOncallChat.mockReturnValue(entry);
+      return entry;
+    });
+    const event = makeBotMessageEvent({
+      senderOpenId: 'ou_platform_bot',
+      rootId: undefined,
+      content: JSON.stringify({ text: '@_user_1 @_user_2 开工吧' }),
+      mentions: [
+        { key: '@_user_1', name: 'BotA', id: { open_id: MY_OPEN_ID } },
+        { key: '@_user_2', name: '提需求的人', id: { open_id: 'ou_req_person' } },
+      ],
+    });
+    event.message.root_id = undefined as any;
+    handlers.isSessionOwner.mockReturnValue(false);
+
+    await capturedHandlers['im.message.receive_v1'](event);
+    await flushEventWork();
+
+    // oncall 腿放行 → 跳过落库、不发卡。
+    expect(mockAddChatGrant).not.toHaveBeenCalled();
+    expect(mockReplyMessage).not.toHaveBeenCalledWith(
+      MY_APP_ID, 'msg-001', expect.any(String), 'interactive',
+    );
+  });
+
   it('delegated grant: bot senders not in grantDelegateBots grant nothing', async () => {
     setupBotState({ allowedUsers: ['ou_owner'] });
     mockGetChatMode.mockResolvedValueOnce('group');
