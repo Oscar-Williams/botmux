@@ -3773,6 +3773,7 @@ export function parseBotConfigsFromText(jsonText: string): BotConfig[] {
     const grantDefaultDurationMs = isGrantDurationOption(entry.grantDefaultDurationMs)
       ? entry.grantDefaultDurationMs
       : undefined;
+    const grantDelegateBots = normalizeStringList(entry.grantDelegateBots);
 
     // customPassthroughCommands：用户额外放行透传的 slash 命令。归一化：转小写、
     // 名字内空白按 `-` 连接（/Ultra Goal → /ultra-goal）、自动补前导 `/`、
@@ -4128,9 +4129,7 @@ export function parseBotConfigsFromText(jsonText: string): BotConfig[] {
       autoGrantRequestCards: entry.autoGrantRequestCards === false ? false : undefined,
       // 默认关，只落显式 true。
       grantRequestToOwnerDm: entry.grantRequestToOwnerDm === true || undefined,
-      grantDelegateBots: normalizeStringList(entry.grantDelegateBots).length
-        ? normalizeStringList(entry.grantDelegateBots)
-        : undefined,
+      grantDelegateBots: grantDelegateBots.length ? grantDelegateBots : undefined,
       // Default is ON (accept bot-sent slash), so only explicit false persists.
       acceptSlashFromBots: entry.acceptSlashFromBots === false ? false : undefined,
       customPassthroughCommands,

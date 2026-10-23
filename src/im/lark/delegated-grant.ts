@@ -11,10 +11,10 @@
  * 不授 canOperate。已经能和本 bot 对话的人（owner、oncall 群成员、已有授权……）跳过，不重复落库。
  */
 import { getBot, getBotOpenId } from '../../bot-registry.js';
-import { canTalk } from './event-dispatcher.js';
-import { parseGrantTargets } from './grant-command.js';
+import { evaluateTalk } from './event-dispatcher.js';
+import { extractMentionIdentities } from './message-parser.js';
 import { buildGrantResultCard } from './card-builder.js';
-import { replyMessage } from './client.js';
+import { isHumanOpenId, replyMessage } from './client.js';
 import { addChatGrant } from '../../services/grant-store.js';
 import { DEFAULT_GRANT_DURATION_MS, DEFAULT_GRANT_QUOTA } from '../../services/grant-policy.js';
 import { localeForBot } from '../../i18n/index.js';
@@ -28,8 +28,35 @@ export function isGrantDelegateSender(larkAppId: string, senderIds: Array<string
 }
 
 /**
+ * 取这条消息里被点名的「其他人」：位置无关（委托语义没有命令词，不能复用 /grant 的
+ * 「命令词之后」位置过滤），mentions[] 与 post inline at 两条形态都覆盖。
+ * 排除：本 bot（open_id / app_id 两种自我形态）、发送方自己、@all 伪 id、
+ * app_id-only 的群外 bot（chatGrant 只收 open_id 主体），按 open_id 去重。
+ */
+function delegatedGrantTargets(
+  message: any,
+  selfOpenId: string | undefined,
+  selfAppId: string,
+  senderIds: Set<string>,
+): Array<{ openId: string; name?: string }> {
+  const out: Array<{ openId: string; name?: string }> = [];
+  const seen = new Set<string>();
+  for (const m of extractMentionIdentities(message)) {
+    const oid = m.openId;
+    if (!oid || !oid.startsWith('ou_') || oid === 'all') continue;
+    if (selfOpenId && oid === selfOpenId) continue;
+    if (m.appId && m.appId === selfAppId) continue;
+    if (senderIds.has(oid) || (m.appId && senderIds.has(m.appId))) continue;
+    if (seen.has(oid)) continue;
+    seen.add(oid);
+    out.push({ openId: oid, name: m.name });
+  }
+  return out;
+}
+
+/**
  * 处理一条已确认 @ 了本 bot 的 bot 消息。发送方不是委托 bot / 非群聊 / 没有可授权的人时什么都不做。
- * 返回本次新授权的 open_id 列表。
+ * 返回本次落库授权的 open_id 列表（首次授权 + 过期后的重新授权；有效期内的既有授权会被上游跳过）。
  */
 export async function applyDelegatedGrants(
   larkAppId: string,
@@ -41,22 +68,34 @@ export async function applyDelegatedGrants(
   if (!isGrantDelegateSender(larkAppId, opts.senderIds)) return [];
 
   const senders = new Set(opts.senderIds.filter((x): x is string => !!x));
-  const targets = parseGrantTargets(message, getBotOpenId(larkAppId))
-    .filter(tgt => tgt.openId !== 'all' && !senders.has(tgt.openId))
-    .filter(tgt => !canTalk(larkAppId, chatId, tgt.openId));
+  // evaluateTalk 而不是 canTalk：黑名单腿排在 chatGrant 之前，被黑用户 canTalk=false
+  // 但绝不能给 ta 落授权、更不能回「已获授权」卡（与 maybeSendGrantRequestCard 的
+  // blocked 短路一致）。其余「已能对话」（owner/oncall/peer/已有授权/开放模式）跳过。
+  const targets = delegatedGrantTargets(message, getBotOpenId(larkAppId), larkAppId, senders)
+    .filter((tgt) => {
+      const r = evaluateTalk(larkAppId, chatId, tgt.openId);
+      return !r.allowed && r.reason !== 'blocked';
+    });
   if (targets.length === 0) return [];
 
-  const config = getBot(larkAppId).config;
-  const quota = config.messageQuota?.defaultLimit ?? DEFAULT_GRANT_QUOTA;
-  const durationMs = config.grantDefaultDurationMs ?? DEFAULT_GRANT_DURATION_MS;
+  const botConfig = getBot(larkAppId).config;
+  const quota = botConfig.messageQuota?.defaultLimit ?? DEFAULT_GRANT_QUOTA;
+  const durationMs = botConfig.grantDefaultDurationMs ?? DEFAULT_GRANT_DURATION_MS;
   const expiresAt = Date.now() + durationMs;
 
+  // 逐人落库。注意：能走到这里的 canTalk 必为 false——有效期内的既有授权在上游
+  // evaluateTalk 已被过滤，所以这里成功的只有两种人：首次授权（created=true）与
+  // 授权过期后被重新点名（chatGrants 行仍在 → created=false，仅重置额度/有效期）。
+  // 两种都要回结果卡：过期后的人需要知道自己又能说话了。
   const granted: Array<{ openId: string; name?: string }> = [];
   for (const tgt of targets) {
     try {
       const r = await addChatGrant(larkAppId, chatId, tgt.openId, quota, expiresAt);
-      if (r.ok) granted.push({ openId: tgt.openId, name: tgt.name });
-      else logger.warn(`[grant:${larkAppId}] delegated grant failed for ${tgt.openId}: ${r.reason}`);
+      if (!r.ok) {
+        logger.warn(`[grant:${larkAppId}] delegated grant failed for ${tgt.openId}: ${r.reason}`);
+        continue;
+      }
+      granted.push({ openId: tgt.openId, name: tgt.name });
     } catch (err) {
       logger.warn(`[grant:${larkAppId}] delegated grant threw for ${tgt.openId}: ${err instanceof Error ? err.message : err}`);
     }
@@ -64,8 +103,12 @@ export async function applyDelegatedGrants(
   if (granted.length === 0) return [];
 
   logger.info(`[grant:${larkAppId}] delegated chat grant by ${[...senders].join('/')} in ${chatId}: ${granted.map(g => g.openId).join(', ')}`);
-  // 回一张与 owner 点卡授权后相同的结果卡：@ 被授权人 + 额度/有效期，让 ta 知道可以直接 @ 本 bot、能用多久。
-  const card = buildGrantResultCard('chat', localeForBot(larkAppId), quota, expiresAt, granted);
+  // 结果卡与 owner 点卡授权后同款。被授权的 bot 只渲染纯文本名字、不发 <at>，
+  // 否则 @ 通知会唤醒对方 bot 误处理这条「已获授权」消息（与 card-handler 授权回调同源处理，
+  // 见其 renderGrantAtMentions 的 isBot 约定）。查通讯录失败按 bot 处理（宁可少 @ 一次）。
+  const humanFlags = await Promise.all(granted.map(g => isHumanOpenId(larkAppId, g.openId).catch(() => false)));
+  const notifyTargets = granted.map((g, i) => ({ openId: g.openId, name: g.name, isBot: !humanFlags[i] }));
+  const card = buildGrantResultCard('chat', localeForBot(larkAppId), quota, expiresAt, notifyTargets);
   await replyMessage(larkAppId, message.message_id, card, 'interactive')
     .catch(err => logger.debug(`delegated grant notify failed: ${err}`));
   return granted.map(g => g.openId);
