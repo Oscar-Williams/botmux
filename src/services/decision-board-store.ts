@@ -158,17 +158,21 @@ const FILE_EXT: Record<string, string> = {
  *   - 已有 ord 列：跳过（幂等）；
  *   - 缺列：ADD COLUMN（NOT NULL 需要默认值），再按 app_id 分区、按 (created_at, id) 从 1 编号。
  *     同毫秒的老图历史上就没有确定顺序，按 id 给一个确定序即可。
+ *
+ *   回填必须一次排名：附件「不清理、不限历史条数」，老图积累到上万行时，逐行 COUNT 的相关
+ *   子查询是 O(n²)，迁移又卡在 open() 的写锁里，首次升级要停几秒到几十秒。窗口函数一遍
+ *   ORDER BY 就是同样的序，UPDATE..FROM 把它写回。
  */
 function migrateBoardFilesOrd(db: DatabaseSyncLike): void {
   const columns = db.prepare('PRAGMA table_info(board_files)').all() as Array<{ name?: unknown }>;
   if (columns.length === 0 || columns.some(c => c.name === 'ord')) return;
   db.exec('ALTER TABLE board_files ADD COLUMN ord INTEGER NOT NULL DEFAULT 0;');
-  db.exec(`UPDATE board_files SET ord = (
-    SELECT COUNT(*) FROM board_files AS b2
-    WHERE b2.app_id = board_files.app_id
-      AND (b2.created_at < board_files.created_at
-        OR (b2.created_at = board_files.created_at AND b2.id <= board_files.id))
-  );`);
+  db.exec(`UPDATE board_files SET ord = t.n
+    FROM (
+      SELECT app_id, id, ROW_NUMBER() OVER (PARTITION BY app_id ORDER BY created_at, id) AS n
+      FROM board_files
+    ) t
+    WHERE board_files.app_id = t.app_id AND board_files.id = t.id;`);
 }
 
 export class DecisionBoardStore {
