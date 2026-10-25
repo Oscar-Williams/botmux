@@ -27,8 +27,11 @@ export const BOARD_CLI_USAGE = `botmux board — 决策看板（只在管家 bot
   --ask <要 owner 定的问题>
   --option "A=做法 → 结果和风险"   可重复；给 --option 就整组替换原有选项
   --recommend <选项键>  --reason <推荐理由>
-  --link kind=ref[|标签]  可重复：pr=owner/repo#12 | issue=owner/repo#3 | commit=owner/repo@sha
+  --link kind=ref[|标签]  可重复，只追加：pr=owner/repo#12 | issue=owner/repo#3 | commit=owner/repo@sha
                           | chat=oc_… | thread=oc_…/omt_… | session=<会话id> | doc=https://… | url=https://…
+                          最后一个 | 之后是标签；网址里本身有 | 时写成 %7C
+  --unlink kind=ref       可重复，仅 set：删掉一条关联（照 show 里的 kind=ref 写）；
+                          先删后加，--unlink 旧 --link 新 = 替换
   --note <一句话>         同时往历史里记一句
   --title <新标题>        仅 set
 
@@ -36,7 +39,7 @@ export const BOARD_CLI_USAGE = `botmux board — 决策看板（只在管家 bot
 
 const VALUE_FLAGS = new Set([
   '--view', '--key', '--state', '--stage', '--kind', '--repo', '--summary', '--progress', '--ask',
-  '--option', '--recommend', '--reason', '--link', '--note', '--title', '--session-id',
+  '--option', '--recommend', '--reason', '--link', '--unlink', '--note', '--title', '--session-id',
 ]);
 const BOOL_FLAGS = new Set(['--json', '--handled', '--clear-ask', '--help', '-h']);
 
@@ -144,6 +147,7 @@ export function parseBoardArgs(argv: string[]): { ok: true; help: true } | { ok:
         request.title = pos[0];
         if (t.flags.has('--title')) return { ok: false, error: 'add 的标题写在位置参数里，不用 --title' };
         if (t.bools.has('--clear-ask')) return { ok: false, error: 'add 不支持 --clear-ask' };
+        if (t.flags.has('--unlink')) return { ok: false, error: 'add 不支持 --unlink，删关联用 set <编号> --unlink' };
       } else {
         if (pos.length !== 1) return { ok: false, error: '用法: botmux board set <编号|key> [字段…]' };
         request.ref = pos[0];
@@ -153,7 +157,8 @@ export function parseBoardArgs(argv: string[]): { ok: true; help: true } | { ok:
       request.fields = fieldsFromFlags();
       if (t.flags.get('--option')?.length) request.options = t.flags.get('--option');
       if (t.flags.get('--link')?.length) request.links = t.flags.get('--link');
-      if (action === 'set' && Object.keys(request.fields as object).length === 0 && !request.options && !request.links && !request.clearAsk) {
+      if (t.flags.get('--unlink')?.length) request.unlinks = t.flags.get('--unlink');
+      if (action === 'set' && Object.keys(request.fields as object).length === 0 && !request.options && !request.links && !request.unlinks && !request.clearAsk) {
         return { ok: false, error: 'set 至少要改一个字段' };
       }
       break;

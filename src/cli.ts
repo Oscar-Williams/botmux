@@ -15833,6 +15833,11 @@ botmux create-group — 用一组机器人新建飞书群
   } else if (result.kickoffMessageId) {
     console.error(`✅ kickoff 消息已发送 (msg ${result.kickoffMessageId})`);
   }
+  for (const steward of result.stewardJoins ?? []) {
+    const label = botInfoEntries.find(b => b.larkAppId === steward.larkAppId)?.botName ?? steward.larkAppId;
+    if (steward.ok) console.error(`✅ 已带上管家 ${label}`);
+    else console.error(`⚠️  管家 ${label} 没加进群（不影响建群）: ${steward.error ?? 'unknown'}`);
+  }
   if (bindWorkingDir) {
     const ok = result.oncallBindings.filter(b => b.ok).length;
     const failed = result.oncallBindings.filter(b => !b.ok);

@@ -37,6 +37,14 @@ describe('parseBoardArgs', () => {
     expect(parsed(['set', '3', '--title', '新标题', '--json']).json).toBe(true);
   });
 
+  it('--unlink：只给 set，可重复，原样传 spec；只有 --unlink 也算改了字段', () => {
+    expect(parsed(['set', '3', '--unlink', 'doc=https://x/d.md|看板文档', '--unlink=pr=o/r#1', '--link', 'pr=o/r#2']).request)
+      .toEqual({ action: 'set', ref: '3', fields: {}, links: ['pr=o/r#2'], unlinks: ['doc=https://x/d.md|看板文档', 'pr=o/r#1'] });
+    expect(parseBoardArgs(['add', 't', '--unlink', 'pr=o/r#1'])).toMatchObject({ ok: false });
+    expect(parseBoardArgs(['history', '3', 'x', '--unlink', 'pr=o/r#1'])).toMatchObject({ ok: false });
+    expect(parseBoardArgs(['set', '3', '--unlink'])).toMatchObject({ ok: false });
+  });
+
   it('history：一句话可以不加引号；--handled 只给 history', () => {
     expect(parsed(['history', '5', '已按', 'A', '合了', '--handled']).request)
       .toEqual({ action: 'history', ref: '5', text: '已按 A 合了', handled: true });

@@ -97,6 +97,36 @@ describe('CLI 动作', () => {
     expect(shown.item.state).toBe('active');
   });
 
+  it('关联：网址后面的「|标签」拆成标签；--unlink 删掉填错的、--unlink 旧 --link 新一次替换', async () => {
+    const created = await service.cli({ action: 'add', title: 'PR #12', links: [
+      'doc=https://github.com/o/r/blob/master/docs/decision-board.md|看板文档', 'pr=o/r#11',
+    ] }, { sessionId: 's' }) as { item: { seq: number } };
+    const seq = String(created.item.seq);
+    let shown = await service.cli({ action: 'show', ref: seq }, { sessionId: 's' }) as any;
+    expect(shown.links.map((l: any) => [l.kind, l.ref, l.text, l.url])).toEqual([
+      ['doc', 'https://github.com/o/r/blob/master/docs/decision-board.md', '看板文档', 'https://github.com/o/r/blob/master/docs/decision-board.md'],
+      ['pr', 'o/r#11', 'PR #11', 'https://github.com/o/r/pull/11'],
+    ]);
+
+    await service.cli({ action: 'set', ref: seq, unlinks: ['pr=o/r#11'], links: ['pr=o/r#12|主 PR'] }, { sessionId: 's' });
+    await service.cli({ action: 'set', ref: seq, unlinks: ['doc=https://github.com/o/r/blob/master/docs/decision-board.md|看板文档'] }, { sessionId: 's' });
+    shown = await service.cli({ action: 'show', ref: seq }, { sessionId: 's' }) as any;
+    expect(shown.links.map((l: any) => `${l.kind}=${l.ref}|${l.text}`)).toEqual(['pr=o/r#12|主 PR']);
+
+    await expect(service.cli({ action: 'set', ref: seq, unlinks: ['pr=o/r#99'] }, { sessionId: 's' }))
+      .rejects.toMatchObject({ code: 'link_not_found' });
+    // 同一条写两遍按一条删，整次改动照常生效。
+    await service.cli({ action: 'set', ref: seq, unlinks: ['pr=o/r#12', 'pr=o/r#12'], fields: { stage: '在修' } }, { sessionId: 's' });
+    shown = await service.cli({ action: 'show', ref: seq }, { sessionId: 's' }) as any;
+    expect(shown.links).toEqual([]);
+    expect(shown.item.stage).toBe('在修');
+    await expect(service.cli({ action: 'set', ref: seq, unlinks: ['jira=X-1'] }, { sessionId: 's' }))
+      .rejects.toMatchObject({ code: 'invalid_link' });
+    // add 不删关联：同 key 的 add 会落到已有事项上，也不能借它删。
+    await expect(service.cli({ action: 'add', title: 'x', unlinks: ['pr=o/r#12'] }, { sessionId: 's' }))
+      .rejects.toMatchObject({ code: 'invalid_link' });
+  });
+
   it('英文界面的管家：自动状态历史写英文状态名', async () => {
     locale = 'en';
     const item = await addDecideItem();

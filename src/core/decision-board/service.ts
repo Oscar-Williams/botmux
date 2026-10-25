@@ -33,12 +33,14 @@ import {
   parseItemRef,
   parseLinkSpec,
   parseOptionSpec,
+  parseUnlinkSpec,
   sidebarAppLink,
   stewardGuidePreset,
   stewardReady,
   type BoardBatch,
   type BoardLink,
   type BoardOption,
+  type BoardUnlink,
   type BoardView,
   type StewardConfig,
 } from './model.js';
@@ -79,6 +81,7 @@ export interface BoardCliRequest {
   fields?: unknown;
   options?: unknown;
   links?: unknown;
+  unlinks?: unknown;
   clearAsk?: unknown;
   text?: unknown;
   handled?: unknown;
@@ -174,6 +177,17 @@ export class DecisionBoardService {
       }
       if (links.length) patch.links = links;
     }
+    if (req.unlinks !== undefined) {
+      if (!Array.isArray(req.unlinks)) throw new BoardError('invalid_links');
+      const unlinks: BoardUnlink[] = [];
+      for (const spec of req.unlinks) {
+        if (typeof spec !== 'string') throw new BoardError('invalid_links');
+        const parsed = parseUnlinkSpec(spec);
+        if ('error' in parsed) throw new BoardError('invalid_link', parsed.error);
+        unlinks.push(parsed);
+      }
+      if (unlinks.length) patch.unlinks = unlinks;
+    }
     if (req.clearAsk === true) {
       patch.question = null;
       patch.options = [];
@@ -232,6 +246,7 @@ export class DecisionBoardService {
       }
       case 'add': {
         const patch = this.parsePatch(req);
+        if (patch.unlinks) throw new BoardError('invalid_link', 'add 不删关联，改用 set <编号> --unlink');
         const title = typeof req.title === 'string' ? req.title : patch.title;
         if (!title?.trim()) throw new BoardError('title_required', '缺少标题');
         const { item, created } = store.addItem(app, { ...patch, title }, ctx.sessionId, undefined, this.deps.locale());

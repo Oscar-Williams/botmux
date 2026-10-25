@@ -77,6 +77,25 @@ describe('bots.json steward', () => {
     expect(await set({ enabled: false })).toMatchObject({ ok: true });
     expect('steward' in JSON.parse(readFileSync(configPath, 'utf8'))[0]).toBe(false);
   });
+
+  it('/config steward：拉新群时带上管家默认开不写盘，关掉写 false 并立即生效', async () => {
+    const { registry, store } = await loaded([{ larkAppId: 'app_a' }]);
+    const spec = store.findConfigField('steward')!;
+    const set = async (raw: unknown) => {
+      const coerced = store.coerceConfigValue(spec, JSON.stringify(raw));
+      if (!coerced.ok) return coerced;
+      return store.applyConfigField('app_a', spec, coerced.value);
+    };
+    expect(await set({ enabled: true, autoJoinNewGroups: true })).toMatchObject({ ok: true });
+    expect(JSON.parse(readFileSync(configPath, 'utf8'))[0].steward).toEqual({ enabled: true });
+    expect(await set({ enabled: true, autoJoinNewGroups: false })).toMatchObject({ ok: true });
+    expect(JSON.parse(readFileSync(configPath, 'utf8'))[0].steward).toEqual({ enabled: true, autoJoinNewGroups: false });
+    expect(registry.getBot('app_a').config.steward).toEqual({ enabled: true, autoJoinNewGroups: false });
+    expect(await set({ enabled: true, autoJoinNewGroups: 1 })).toMatchObject({ ok: false });
+    expect(JSON.parse(readFileSync(configPath, 'utf8'))[0].steward).toEqual({ enabled: true, autoJoinNewGroups: false });
+    expect(await set({ enabled: true, autoJoinSoloGroups: true })).toMatchObject({ ok: true });
+    expect(JSON.parse(readFileSync(configPath, 'utf8'))[0].steward).toEqual({ enabled: true, autoJoinSoloGroups: true });
+  });
 });
 
 describe('管家群常驻提示', () => {

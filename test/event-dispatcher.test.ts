@@ -13492,6 +13492,33 @@ describe('chat.bot_added observer hook', () => {
     expect(runGroupJoinCommandMock).toHaveBeenCalledTimes(1);
   });
 
+  it('a steward pulled into a new chat by botmux joins silently: no hook, join command, owner invite or auto-start', async () => {
+    runGroupJoinCommandMock.mockClear();
+    const state = setupBotState({ allowedUsers: [USER_OPEN_ID] });
+    Object.assign(state.config, { groupJoinCommandEnabled: true, groupJoinCommand: 'bash /opt/on-join.sh' });
+    const handleBotAdded = vi.fn(async () => {});
+    Object.assign(handlers, { handleBotAdded });
+    // group-creator 加管家之前写的「静默加入」标记（内容是写入时间）；其它群没有标记。
+    const markedAt = String(Date.now());
+    mockReadFileSync.mockImplementation((path: any) =>
+      String(path).endsWith(`steward-silent-joins/${MY_APP_ID}/oc_silent`) ? markedAt : '[]');
+    try {
+      capturedHandlers['im.chat.member.bot.added_v1']({ chat_id: 'oc_silent', operator_id: { open_id: USER_OPEN_ID } });
+      await flushEventWork();
+      expect(emitHookEventMock.mock.calls.filter(c => c[0] === 'chat.bot_added')).toHaveLength(0);
+      expect(runGroupJoinCommandMock).not.toHaveBeenCalled();
+      expect(handleBotAdded).not.toHaveBeenCalled();
+
+      capturedHandlers['im.chat.member.bot.added_v1']({ chat_id: 'oc_normal', operator_id: { open_id: USER_OPEN_ID } });
+      await flushEventWork();
+      expect(emitHookEventMock.mock.calls.filter(c => c[0] === 'chat.bot_added')).toHaveLength(1);
+      expect(runGroupJoinCommandMock).toHaveBeenCalledTimes(1);
+      expect(handleBotAdded).toHaveBeenCalledWith('oc_normal', USER_OPEN_ID, MY_APP_ID);
+    } finally {
+      mockReadFileSync.mockImplementation(() => '[]');
+    }
+  });
+
   it('does not run the group-join command when disabled or blank', async () => {
     runGroupJoinCommandMock.mockClear();
     const state = setupBotState({ allowedUsers: [USER_OPEN_ID] });

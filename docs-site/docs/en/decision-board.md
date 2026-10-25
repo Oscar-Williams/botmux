@@ -21,6 +21,16 @@ In Feishu you can also run `/config set steward {"enabled":true,"chatId":"oc_…
 - Anything it cannot decide, or anything irreversible, becomes a "needs decision" item with options, consequences and a recommendation.
 - Scheduled patrols are not part of this feature. Use a [scheduled task](./schedule.md) for the steward if you want one.
 
+## Adding the steward to new chats
+
+To post in a chat as itself, the steward has to be a member. So once a steward is on, every chat botmux creates (`/group`, the session chat created from a direct message, `/fork --create`, `/relay --create`, Dashboard group creation, `botmux create-group` and every other entry point) is checked: if the steward's owner is a member or the initiator of the new chat, the creating bot adds the steward as well.
+
+- **On by default.** The switch is **Bot Config → Steward → Add the steward to new chats**; `/config set steward {"enabled":true,"chatId":"oc_…","autoJoinNewGroups":false}` turns it off too. If your steward does not post as its own bot (for example, it posts as the owner), you do not need it in new chats — turn this off.
+- The steward **joins silently**: its group-join command, group-join hooks and "auto-start when added to a new chat" do not run, it does not pull its owner in, and it is left out of oncall binding, role suites and kickoff. It answers later only when someone @-mentions it, as usual.
+- **Only the matching steward joins**: when several people on one machine each have a steward, only the one whose owner is in the new chat is added. Owners are matched by union_id; a steward with no owner (empty allowedUsers), or whose daemon has not resolved its owner's union_id yet (just started, or no contacts permission), is not added.
+- **New chats with only one person and one bot are skipped by default**: for example the session chat created from a direct message, a chat made with `/group` or `/fork --create` in a direct message, or a meeting listener chat. You keep talking in those without an @, and the steward would make it two bots, so the original bot would need an @. This is decided from who actually joined. To add the steward there too, turn on **Also add it to chats with only you and one bot** (off by default, requires the switch above), or set `"autoJoinSoloGroups":true`.
+- A steward that is already among the requested bots is not added twice. If adding it fails (app visibility, permissions, …) the chat is still created; the failure is logged and `botmux create-group` reports it.
+
 ## The board
 
 - **Overview**: Needs your decision / In progress / All. ● = the steward wrote something since you last looked; ✎ = you have an unsubmitted draft.
@@ -49,12 +59,13 @@ botmux board show <n|key>
 botmux board add <title> --key pr:owner/repo#12 --link pr=owner/repo#12 --link chat=oc_…
 botmux board set <n> --state decide --ask "question" \
   --option "A=approach → outcome" --option "B=…" --recommend A --reason "why"
+botmux board set <n> --unlink doc=https://old --link "doc=https://new|Board doc"   # remove / replace a link
 botmux board history <n> "what was done" --handled
 botmux board attach <n> shot.png --note "repro"
 botmux board pending
 ```
 
-See `botmux board --help` for every option.
+In `--link kind=ref|label` everything after the last `|` is the label (write a literal `|` inside a URL as `%7C`). `--link` only appends; remove a wrong one with `--unlink kind=ref`. See `botmux board --help` for every option.
 
 ## Data
 

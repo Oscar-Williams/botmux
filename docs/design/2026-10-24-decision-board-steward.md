@@ -199,9 +199,12 @@ owner 改了 #31、#27、#12 → 每项草稿自动存进 board_drafts（不往�
 - 设为管家：开关，默认关。
 - 管家所在群：从这个 bot 所在的群里选，建议选「owner 1 人 + 管家」的群。owner 在这里交代任务，批次也送到这个群的 chat 级会话，始终是同一个会话。管家的记忆以看板为准，不靠对话，`/clear` 之后也不丢。
 - 提示词：预置内容只读展示；下面是自定义文本框，方式二选一：「追加在预置后」或「替换预置」。
+- 拉新群时带上管家：开关，开了管家后默认开（见下）；其下「只有你和一个 Bot 的群也带上管家」，默认关。
 - 打开决策看板的入口。
 
-这些存在 bots.json 的 `steward` 字段里：`{enabled, chatId, guideMode, guideText}`。等于默认值时不写盘。
+这些存在 bots.json 的 `steward` 字段里：`{enabled, chatId, guideMode, guideText, autoJoinNewGroups, autoJoinSoloGroups}`。等于默认值时不写盘（`autoJoinNewGroups` 只在关掉时写 `false`，`autoJoinSoloGroups` 只在打开时写 `true`）。
+
+**拉新群时带上管家**（2026-10-25 追加）：管家要用自己的 bot 身份在群里发消息，得先在群里。botmux 建的每个新群都在建群统一入口 `createGroupWithBots` 里判断：本机有开着这个开关的管家、新群成员或发起人里有它的 owner（按 union_id 认，owner 由管家 daemon 发布在 bot-admin-unions 快照的 `owner` 字段里；没配 owner 或换不出 union_id 的管家不带），就由建群的 bot 把管家拉进群。管家静默进群：不参与协作授权 / oncall 绑定 / 角色套装 / kickoff，加群前写静默加入标记，管家 daemon 收到这次入群事件时不跑入群钩子、入群命令、拉 owner、自动开工。失败只记在建群结果的 `stewardJoins`，不影响建群。实际进群只有一个人和一个 bot 的新群（私聊转出的会话群、私聊里 `/group`、`/fork --create` 建的群、会议监听群等）默认不带——它们靠单人单 bot 免 @ 续话，跳过时不做任何身份查询；管家打开 `autoJoinSoloGroups` 才带（带上后原 bot 要 @ 才回）。由 createGroupWithBots 按实际进群的 bot 数和人数判断，不靠调用方声明，新加的建群入口也自动适用。
 
 **管家怎么知道规则**：
 - 只在「管家 bot × 管家群」这一处常驻一行系统提示，照现有 `<project_group_mode>` 的做法（系统自带、只对指定群生效、和自定义角色并列）：
@@ -266,6 +269,7 @@ botmux board add <标题> [--key K] [--state S] [--stage 阶段] [--kind 类型]
                  [--link pr=owner/repo#N | chat=oc_… | thread=om_… | session=<id> | commit=owner/repo@sha | url=…]...
                  [--note 一句话]                                 # 同 key 已存在时按 set 更新，并给出提示
 botmux board set <编号|key> [字段同上] [--clear-ask] [--note 一句话]   # 改状态和字段会自动记进历史
+                 [--unlink kind=ref]...                          # 删关联；先删后加，--unlink 旧 --link 新 = 替换
 botmux board history <编号|key> <一句话> [--handled]             # 追加历史；--handled 表示这项最近一批决定已执行
 botmux board attach <编号|key> <图片>... [--note 说明]           # 附相关截图
 botmux board pending [--json]                                    # 已提交、还没标记已执行的决定
@@ -327,7 +331,7 @@ botmux board guide                                               # 打印管家�
   - session-manager 新增 `deliverOwnerBatchTurn`，只组合现有原语，定时任务路径不动。
 - **跨 CLI**：管家只要求 shell 能跑 `botmux`，与 CLI 种类、是否零注入都无关。附图按普通图片附件送，和在飞书里发图一样。
 - **跨后端、跨会话类型**：pty 和 tmux 没有差别。管家群用 chat 级会话，所有批次进同一个会话；选了话题群时，批次按普通群顶层消息的规则落点，配置页提示建议用普通群。
-- **前提**：管家 bot 要在目标群里。目标 bot 要接受管家 bot 的消息：飞书侧要开「获取群组中其他机器人 @ 当前机器人的消息」权限，botmux 侧要给管家 bot 对话授权。
+- **前提**：管家 bot 要在目标群里（botmux 建的新群默认会带上它，见第 6 节）。目标 bot 要接受管家 bot 的消息：飞书侧要开「获取群组中其他机器人 @ 当前机器人的消息」权限，botmux 侧要给管家 bot 对话授权。
 - **编译版**：预置文本编进代码，不拼 `__dirname` 路径。
 - **平台**：不改平台仓库。
 

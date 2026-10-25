@@ -806,7 +806,11 @@ function startAdminUnionsPublisher(larkAppId: string): void {
     readState: () => {
       try {
         const bot = getBot(larkAppId);
-        return { rawAllowedUsers: bot.config.allowedUsers ?? [], resolution: bot.rawAllowedUserResolution };
+        return {
+          rawAllowedUsers: bot.config.allowedUsers ?? [],
+          resolution: bot.rawAllowedUserResolution,
+          ownerOpenId: getOwnerOpenId(larkAppId),
+        };
       } catch {
         return undefined;
       }

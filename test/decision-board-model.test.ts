@@ -13,9 +13,11 @@ import {
   parseItemRef,
   parseLinkSpec,
   parseOptionSpec,
+  parseUnlinkSpec,
   renderStewardHintBlock,
   sidebarAppLink,
   stewardGuidePreset,
+  stewardJoinsNewGroups,
   stewardReady,
 } from '../src/core/decision-board/model.js';
 
@@ -39,10 +41,28 @@ describe('CLI 参数解析', () => {
     expect(parseLinkSpec('pr=deepcoldy/botmux#2195|主 PR')).toEqual({ kind: 'pr', ref: 'deepcoldy/botmux#2195', label: '主 PR' });
     expect(parseLinkSpec('chat=oc_abc')).toEqual({ kind: 'chat', ref: 'oc_abc' });
     expect(parseLinkSpec('commit=o/r@236b328')).toEqual({ kind: 'commit', ref: 'o/r@236b328' });
-    expect(parseLinkSpec('url=https://example.com/a?x=1|y')).toEqual({ kind: 'url', ref: 'https://example.com/a?x=1|y' });
     expect(parseLinkSpec('url=https://example.com/a | 文档')).toEqual({ kind: 'url', ref: 'https://example.com/a', label: '文档' });
     expect(parseLinkSpec('pr=not-a-pr')).toHaveProperty('error');
     expect(parseLinkSpec('jira=ABC-1')).toHaveProperty('error');
+  });
+
+  it('关联：网址类的「|标签」和其它类型同一条规则，最后一个 | 之后是标签', () => {
+    // 帮助里写的 kind=ref|标签：网址后面紧跟 |标签 也要拆开，不能把「|看板文档」拼进 ref。
+    expect(parseLinkSpec('doc=https://github.com/o/r/blob/master/docs/decision-board.md|看板文档'))
+      .toEqual({ kind: 'doc', ref: 'https://github.com/o/r/blob/master/docs/decision-board.md', label: '看板文档' });
+    expect(parseLinkSpec('url=https://example.com/a?x=1|y')).toEqual({ kind: 'url', ref: 'https://example.com/a?x=1', label: 'y' });
+    // 网址里本身的 | 写成 %7C，原样留在 ref 里。
+    expect(parseLinkSpec('url=https://example.com/a?x=1%7Cy|查询')).toEqual({ kind: 'url', ref: 'https://example.com/a?x=1%7Cy', label: '查询' });
+    expect(parseLinkSpec('doc=https://example.com/d|')).toEqual({ kind: 'doc', ref: 'https://example.com/d' });
+    expect(parseLinkSpec('doc=|标签')).toHaveProperty('error');
+  });
+
+  it('要删的关联：保留原文，另给去掉标签的 ref；格式不对的旧关联也能删', () => {
+    expect(parseUnlinkSpec('pr=o/r#12')).toEqual({ kind: 'pr', raw: 'o/r#12' });
+    expect(parseUnlinkSpec('doc=https://x/d.md|看板文档')).toEqual({ kind: 'doc', raw: 'https://x/d.md|看板文档', ref: 'https://x/d.md' });
+    expect(parseUnlinkSpec('pr=not-a-pr')).toEqual({ kind: 'pr', raw: 'not-a-pr' });
+    expect(parseUnlinkSpec('jira=ABC-1')).toHaveProperty('error');
+    expect(parseUnlinkSpec('chat=')).toHaveProperty('error');
   });
 });
 
@@ -80,6 +100,39 @@ describe('管家配置', () => {
     expect(normalizeStewardConfig({ enabled: true, guideMode: 'replace' })).toMatchObject({ ok: false });
     expect(normalizeStewardConfig({ enabled: true, chatId: 'bad' })).toMatchObject({ ok: false });
     expect(normalizeStewardConfig({ enabled: true, extra: 1 })).toMatchObject({ ok: false });
+  });
+
+  it('拉新群时带上管家：默认开，只有关掉时才写进字段', () => {
+    expect(normalizeStewardConfig({ enabled: true, chatId: 'oc_a', autoJoinNewGroups: true }))
+      .toEqual({ ok: true, value: { enabled: true, chatId: 'oc_a' } });
+    expect(normalizeStewardConfig({ enabled: true, autoJoinNewGroups: false }))
+      .toEqual({ ok: true, value: { enabled: true, autoJoinNewGroups: false } });
+    // 管家关着时也记住「不带」的选择，下次打开管家不会悄悄变回带。
+    expect(normalizeStewardConfig({ enabled: false, autoJoinNewGroups: false }))
+      .toEqual({ ok: true, value: { enabled: false, autoJoinNewGroups: false } });
+    expect(normalizeStewardConfig({ enabled: false, autoJoinNewGroups: true })).toEqual({ ok: true, value: null });
+    expect(normalizeStewardConfig({ enabled: true, autoJoinNewGroups: 'no' })).toMatchObject({ ok: false });
+  });
+
+  it('单人群也带：默认关，只有打开时才写进字段', () => {
+    expect(normalizeStewardConfig({ enabled: true, autoJoinSoloGroups: false })).toEqual({ ok: true, value: { enabled: true } });
+    expect(normalizeStewardConfig({ enabled: true, autoJoinSoloGroups: true }))
+      .toEqual({ ok: true, value: { enabled: true, autoJoinSoloGroups: true } });
+    expect(normalizeStewardConfig({ enabled: false, autoJoinSoloGroups: true }))
+      .toEqual({ ok: true, value: { enabled: false, autoJoinSoloGroups: true } });
+    expect(normalizeStewardConfig({ enabled: true, autoJoinSoloGroups: 1 })).toMatchObject({ ok: false });
+  });
+
+  it('只有开着的管家、且没关「拉新群时带上管家」才会被带进新群', () => {
+    expect(stewardJoinsNewGroups({ enabled: true })).toBe(true);
+    expect(stewardJoinsNewGroups({ enabled: true, autoJoinNewGroups: false })).toBe(false);
+    expect(stewardJoinsNewGroups({ enabled: false })).toBe(false);
+    expect(stewardJoinsNewGroups(undefined)).toBe(false);
+    // 只有一个人和一个 bot 的新群：默认不带，打开 autoJoinSoloGroups 才带，且仍受总开关约束。
+    expect(stewardJoinsNewGroups({ enabled: true }, { soloGroup: true })).toBe(false);
+    expect(stewardJoinsNewGroups({ enabled: true, autoJoinSoloGroups: true }, { soloGroup: true })).toBe(true);
+    expect(stewardJoinsNewGroups({ enabled: true, autoJoinNewGroups: false, autoJoinSoloGroups: true }, { soloGroup: true })).toBe(false);
+    expect(stewardJoinsNewGroups({ enabled: true, autoJoinSoloGroups: true })).toBe(true);
   });
 
   it('开关开了且选了群才算就绪', () => {

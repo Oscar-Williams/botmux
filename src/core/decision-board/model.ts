@@ -190,34 +190,57 @@ const LINK_REF_PATTERNS: Record<BoardLinkKind, RegExp> = {
   url: /^https?:\/\/\S+$/,
 };
 
-/**
- * `--link pr=owner/repo#12`、`chat=oc_x`、`thread=oc_x/omt_y`、`session=<id>`、
- * `commit=owner/repo@sha`、`doc=https://…`、`url=https://…`。可选 `|标签` 后缀。
- */
-export function parseLinkSpec(raw: string): BoardLink | { error: string } {
+function splitLinkKind(raw: string): { kind: BoardLinkKind; rest: string } | { error: string } {
   const eq = raw.indexOf('=');
   if (eq <= 0) return { error: `关联格式应为 kind=ref：${raw}` };
   const kind = raw.slice(0, eq).trim() as BoardLinkKind;
   if (!(LINK_KINDS as readonly string[]).includes(kind)) {
     return { error: `不认识的关联类型 ${kind}（可用：${LINK_KINDS.join(' / ')}）` };
   }
-  let rest = raw.slice(eq + 1).trim();
+  return { kind, rest: raw.slice(eq + 1).trim() };
+}
+
+/**
+ * `--link pr=owner/repo#12`、`chat=oc_x`、`thread=oc_x/omt_y`、`session=<id>`、
+ * `commit=owner/repo@sha`、`doc=https://…`、`url=https://…`。可选 `|标签` 后缀：
+ * 最后一个 `|` 之后是标签，所有类型同一条规则（网址里本身的 `|` 要写成 `%7C`）。
+ */
+export function parseLinkSpec(raw: string): BoardLink | { error: string } {
+  const split = splitLinkKind(raw);
+  if ('error' in split) return split;
+  const { kind } = split;
+  let rest = split.rest;
   let label: string | undefined;
   const bar = rest.lastIndexOf('|');
-  if (bar > 0 && kind !== 'url' && kind !== 'doc') {
+  if (bar > 0) {
     label = rest.slice(bar + 1).trim() || undefined;
     rest = rest.slice(0, bar).trim();
-  } else if (bar > 0 && /\s\|\s/.test(rest)) {
-    // URL 本身可能带 `|`；只认「空格|空格」作标签分隔。
-    const sep = rest.lastIndexOf(' | ');
-    label = rest.slice(sep + 3).trim() || undefined;
-    rest = rest.slice(0, sep).trim();
   }
   if (!rest || rest.length > BOARD_LIMITS.ref || !LINK_REF_PATTERNS[kind].test(rest)) {
     return { error: `关联 ${kind} 的格式不对：${rest || '(空)'}` };
   }
   if (label && label.length > BOARD_LIMITS.shortText) return { error: '关联标签太长' };
   return { kind, ref: rest, ...(label ? { label } : {}) };
+}
+
+/** `--unlink kind=ref` 要删的关联：先按原文精确匹配，没有再按去掉 `|标签` 后的 ref 匹配。 */
+export interface BoardUnlink {
+  kind: BoardLinkKind;
+  /** `kind=` 之后的原文。也用来删修复前存进去的、ref 里带着 `|标签` 的旧关联。 */
+  raw: string;
+  /** 去掉 `|标签` 后的 ref；与 raw 相同时省略。 */
+  ref?: string;
+}
+
+/** 删除只认已存在的关联，不按类型校验 ref 格式（格式不对的旧关联也要删得掉）。 */
+export function parseUnlinkSpec(raw: string): BoardUnlink | { error: string } {
+  const split = splitLinkKind(raw);
+  if ('error' in split) return split;
+  const { kind, rest } = split;
+  if (!rest || rest.length > BOARD_LIMITS.ref) return { error: `要删的关联 ${kind} 格式不对：${rest || '(空)'}` };
+  const bar = rest.lastIndexOf('|');
+  const ref = bar > 0 ? rest.slice(0, bar).trim() : rest;
+  return { kind, raw: rest, ...(ref && ref !== rest ? { ref } : {}) };
 }
 
 export interface LinkRenderContext {
@@ -305,12 +328,22 @@ export interface StewardConfig {
   chatId?: string;
   guideMode?: StewardGuideMode;
   guideText?: string;
+  /**
+   * botmux 拉新群时，新群里有管家的 owner 就把管家一起拉进去（管家只是进群，不发言、不开会话），
+   * 让它之后能用自己的 bot 身份在群里推进。默认开，只在关掉时写 `false`。
+   */
+  autoJoinNewGroups?: boolean;
+  /**
+   * 只有一个人和一个 bot 的新群（私聊转出的会话群、私聊里 /group、/fork --create 建的群等）也带上
+   * 管家。默认关：带上后群里有两个 bot，原 bot 不再按单人单 bot 免 @ 续话。只在打开时写 `true`。
+   */
+  autoJoinSoloGroups?: boolean;
 }
 
 export const STEWARD_GUIDE_TEXT_MAX = 20_000;
 
 /**
- * bots.json / Dashboard 写入的统一校验。等于默认（关、无群、无自定义）时返回 null，
+ * bots.json / Dashboard 写入的统一校验。等于默认（关、无群、无自定义、拉群带管家）时返回 null，
  * 调用方据此删除字段——等于默认值不写盘。
  */
 export function normalizeStewardConfig(raw: unknown):
@@ -319,10 +352,16 @@ export function normalizeStewardConfig(raw: unknown):
   if (raw === null || raw === undefined) return { ok: true, value: null };
   if (typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, reason: 'steward 必须是对象' };
   const r = raw as Record<string, unknown>;
-  const known = new Set(['enabled', 'chatId', 'guideMode', 'guideText']);
+  const known = new Set(['enabled', 'chatId', 'guideMode', 'guideText', 'autoJoinNewGroups', 'autoJoinSoloGroups']);
   const unknown = Object.keys(r).filter(k => !known.has(k));
   if (unknown.length) return { ok: false, reason: `steward 有未知字段：${unknown.join(', ')}` };
   if (r.enabled !== undefined && typeof r.enabled !== 'boolean') return { ok: false, reason: 'steward.enabled 必须是布尔值' };
+  if (r.autoJoinNewGroups !== undefined && r.autoJoinNewGroups !== null && typeof r.autoJoinNewGroups !== 'boolean') {
+    return { ok: false, reason: 'steward.autoJoinNewGroups 必须是布尔值' };
+  }
+  if (r.autoJoinSoloGroups !== undefined && r.autoJoinSoloGroups !== null && typeof r.autoJoinSoloGroups !== 'boolean') {
+    return { ok: false, reason: 'steward.autoJoinSoloGroups 必须是布尔值' };
+  }
   let chatId: string | undefined;
   if (r.chatId !== undefined && r.chatId !== null && r.chatId !== '') {
     if (typeof r.chatId !== 'string' || !/^oc_[A-Za-z0-9_-]{1,128}$/.test(r.chatId)) {
@@ -350,14 +389,28 @@ export function normalizeStewardConfig(raw: unknown):
     ...(chatId ? { chatId } : {}),
     ...(guideMode && guideMode !== 'append' ? { guideMode } : {}),
     ...(guideText ? { guideText } : {}),
+    ...(r.autoJoinNewGroups === false ? { autoJoinNewGroups: false } : {}),
+    ...(r.autoJoinSoloGroups === true ? { autoJoinSoloGroups: true } : {}),
   };
-  if (!value.enabled && !value.chatId && !value.guideMode && !value.guideText) return { ok: true, value: null };
+  if (!value.enabled && !value.chatId && !value.guideMode && !value.guideText
+    && value.autoJoinNewGroups !== false && value.autoJoinSoloGroups !== true) {
+    return { ok: true, value: null };
+  }
   return { ok: true, value };
 }
 
 /** 管家可用 = 开关开 + 选了管家群。只开开关没选群时，看板可读写，但批次无处投递。 */
 export function stewardReady(cfg: StewardConfig | undefined): cfg is StewardConfig & { chatId: string } {
   return !!cfg?.enabled && !!cfg.chatId;
+}
+
+/**
+ * 拉新群时要不要带上这个管家：管家开着、且没关「拉新群时带上管家」；只有一个人和一个 bot 的新群
+ * 另外要打开 autoJoinSoloGroups。不要求选了管家群。
+ */
+export function stewardJoinsNewGroups(cfg: StewardConfig | undefined, chat: { soloGroup?: boolean } = {}): boolean {
+  if (cfg?.enabled !== true || cfg.autoJoinNewGroups === false) return false;
+  return chat.soloGroup ? cfg.autoJoinSoloGroups === true : true;
 }
 
 // ─── 管家规则（`botmux board guide`）────────────────────────────────────────

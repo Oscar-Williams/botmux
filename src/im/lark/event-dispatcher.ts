@@ -31,6 +31,7 @@ import { isTeamGroupChat } from '../../services/team-groups-store.js';
 import { isPlatformTeamBot, isPlatformHallChat, isPlatformTeamMember } from '../../services/platform-team-store.js';
 import { getBotUnionId, recordBotUnionId, recordBotUnionIdFromMentions } from '../../services/bot-union-ids-store.js';
 import { readBotAdminUnions } from '../../services/bot-admin-unions-store.js';
+import { isStewardSilentJoin } from '../../services/steward-auto-join.js';
 import { docWatchAnchor, getDocSubscription, putDocSubscription, removeDocSubscription, listAllDocSubscriptions, recordDocWatchActivity, setDocTitle, settleDocCommentWsDelivery, type DocSubscription, type DocWatchOutcome } from '../../services/doc-subs-store.js';
 import { wasPendingReviewNotified, markPendingReviewNotified } from '../../services/under-review-notify-store.js';
 import { getDocComment, isBotAuthoredReply, hasBotSentinel, commentTriggerAllowed, fetchDocTitle, BOT_REPLY_SENTINEL, addCommentReactionChecked } from './doc-comment.js';
@@ -6288,6 +6289,12 @@ export function createLarkEventDispatcherRuntime(
         const chatId: string | undefined = data?.chat_id;
         const operatorOpenId: string | undefined = data?.operator_id?.open_id;
         if (!chatId) return;
+        // 拉新群时静默带进来的管家（决策看板）：只是进群好之后用自己的身份发消息，
+        // 这次入群不跑入群钩子 / 入群命令 / 拉 owner / 自动开工，不发言也不开会话。
+        if (isStewardSilentJoin(config.session.dataDir, larkAppId, chatId)) {
+          logger.info(`[steward-join] joined chat=${chatId.substring(0, 12)} silently as a steward; skipping group-join actions`);
+          return;
+        }
         logger.info(`[auto-start:入群] bot added to chat=${chatId.substring(0, 12)} by ${String(operatorOpenId ?? '?').substring(0, 12)}`);
         // chat.bot_added 观察钩子：拉群信号（应急群自动化的触发点之一）。
         // 放在 scheduleAckSafeEvent 的去重 claim 之后，重推不会重复发射。

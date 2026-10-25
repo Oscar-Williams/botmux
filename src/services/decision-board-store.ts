@@ -30,6 +30,7 @@ import {
   type BoardLink,
   type BoardOption,
   type BoardState,
+  type BoardUnlink,
   type BoardView,
   isBoardState,
   stateInView,
@@ -58,6 +59,8 @@ export interface ItemPatch {
   recommend?: string | null;
   recommendReason?: string | null;
   links?: BoardLink[];
+  /** 先删这些关联再加 links：`--unlink 旧 --link 新` 一次完成替换。只在 update 里生效。 */
+  unlinks?: BoardUnlink[];
   note?: string;
 }
 
@@ -416,6 +419,32 @@ export class DecisionBoardStore {
   }
 
   /**
+   * 删关联。每条先按 `kind=` 后的原文精确匹配，没有再按去掉 `|标签` 的 ref 匹配——修复前
+   * 存进去的、ref 里带着 `|标签` 的旧关联也能原样删掉。对不上任何关联就报错（整个改动回滚），
+   * 不静默当成删过了；同一次里前面已经删掉的那条再写一遍（原样重复，或带标签 / 不带标签两种写法）
+   * 按删过了算。
+   */
+  private removeLinks(appId: string, seq: number, unlinks: BoardUnlink[], at: number, actorRef?: string): void {
+    const del = this.stmt('DELETE FROM board_links WHERE app_id = ? AND seq = ? AND kind = ? AND ref = ?');
+    const removed: string[] = [];
+    for (const u of unlinks) {
+      let ref = u.raw;
+      let changes = Number(del.run(appId, seq, u.kind, ref).changes);
+      if (changes === 0 && u.ref) {
+        ref = u.ref;
+        changes = Number(del.run(appId, seq, u.kind, ref).changes);
+      }
+      if (changes > 0) {
+        removed.push(`${u.kind}=${ref}`);
+        continue;
+      }
+      if (removed.includes(`${u.kind}=${u.raw}`) || (u.ref && removed.includes(`${u.kind}=${u.ref}`))) continue;
+      throw new BoardError('link_not_found', `#${seq} 没有关联 ${u.kind}=${u.raw}`);
+    }
+    if (removed.length) this.insertEvent(appId, seq, at, 'steward', actorRef, 'link', `移除 ${removed.join('，')}`);
+  }
+
+  /**
    * 新建一项；带 key 且已存在时按 update 处理（管家不用记编号，同一件事反复 add 不会重复建）。
    */
   addItem(appId: string, patch: ItemPatch & { title: string }, actorRef?: string, now = Date.now(), locale: Locale = 'zh'):
@@ -500,6 +529,7 @@ export class DecisionBoardStore {
       } else if (progressChanged) {
         this.insertEvent(appId, seq, now, 'steward', actorRef, 'edit', '更新了当前进展');
       }
+      if (patch.unlinks?.length) this.removeLinks(appId, seq, patch.unlinks, now, actorRef);
       if (patch.links?.length) this.addLinks(appId, seq, patch.links, now, actorRef);
       if (patch.note?.trim()) this.insertEvent(appId, seq, now, 'steward', actorRef, 'note', patch.note.trim());
       return rowToItem(this.itemRow(appId, seq)!);

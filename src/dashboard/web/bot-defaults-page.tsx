@@ -6186,6 +6186,8 @@ export function StewardSection(props: { bot: BotDefaultsRow; patchBot: PatchBot;
   const savedForm = useMemo(() => stewardFormFrom(props.bot.steward), [props.bot.steward]);
   const [enabled, setEnabled] = useState(savedForm.enabled);
   const [chatId, setChatId] = useState(savedForm.chatId);
+  const [autoJoin, setAutoJoin] = useState(savedForm.autoJoinNewGroups);
+  const [autoJoinSolo, setAutoJoinSolo] = useState(savedForm.autoJoinSoloGroups);
   const [guideMode, setGuideMode] = useState<StewardGuideMode>(savedForm.guideMode);
   const [guideText, setGuideText] = useState(savedForm.guideText);
   const [busy, setBusy] = useState(false);
@@ -6202,6 +6204,8 @@ export function StewardSection(props: { bot: BotDefaultsRow; patchBot: PatchBot;
   // 各自只在自己那部分的已保存值变化时同步：保存开关后不能把没保存的提示词冲掉。
   useEffect(() => { setEnabled(savedForm.enabled); }, [appId, savedForm.enabled]);
   useEffect(() => { setChatId(savedForm.chatId); }, [appId, savedForm.chatId]);
+  useEffect(() => { setAutoJoin(savedForm.autoJoinNewGroups); }, [appId, savedForm.autoJoinNewGroups]);
+  useEffect(() => { setAutoJoinSolo(savedForm.autoJoinSoloGroups); }, [appId, savedForm.autoJoinSoloGroups]);
   useEffect(() => {
     setGuideMode(savedForm.guideMode);
     setGuideText(savedForm.guideText);
@@ -6259,6 +6263,18 @@ export function StewardSection(props: { bot: BotDefaultsRow; patchBot: PatchBot;
     void save({ ...savedForm, enabled: on }, setStatus, () => setEnabled(previous));
   }
 
+  function toggleAutoJoin(on: boolean): void {
+    const previous = autoJoin;
+    setAutoJoin(on);
+    void save({ ...savedForm, autoJoinNewGroups: on }, setStatus, () => setAutoJoin(previous));
+  }
+
+  function toggleAutoJoinSolo(on: boolean): void {
+    const previous = autoJoinSolo;
+    setAutoJoinSolo(on);
+    void save({ ...savedForm, autoJoinSoloGroups: on }, setStatus, () => setAutoJoinSolo(previous));
+  }
+
   function changeChat(next: string): void {
     const previous = chatId;
     setChatId(next);
@@ -6314,6 +6330,23 @@ export function StewardSection(props: { bot: BotDefaultsRow; patchBot: PatchBot;
               {selectedChat?.chatMode === 'topic' ? <p className="bd-section-note">{tr('botDefaults.stewardChatTopic')}</p> : null}
             </div>
           </div>
+          <ToggleRow
+            checked={autoJoin}
+            disabled={busy}
+            dataAction="toggle-steward-auto-join"
+            title={tr('botDefaults.stewardAutoJoin')}
+            help={tr('botDefaults.stewardAutoJoinHelp')}
+            onChange={toggleAutoJoin}
+          />
+          {/* 受上一项约束：拉新群不带管家时，单人群自然也不带，置灰。 */}
+          <ToggleRow
+            checked={autoJoinSolo}
+            disabled={busy || !autoJoin}
+            dataAction="toggle-steward-auto-join-solo"
+            title={tr('botDefaults.stewardAutoJoinSolo')}
+            help={tr('botDefaults.stewardAutoJoinSoloHelp')}
+            onChange={toggleAutoJoinSolo}
+          />
           <div className="bd-row bd-steward-guide">
             <div className="bd-field">
               <FieldTitle help={tr('botDefaults.stewardGuideHelp')}>{tr('botDefaults.stewardGuide')}</FieldTitle>
